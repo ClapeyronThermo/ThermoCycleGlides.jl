@@ -18,7 +18,7 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-Clapeyron = "0.6.23"
+Clapeyron = "0.6.24"
 CoolProp = "0.2.2"
 FiniteDifferences = "0.12.32"
 ForwardDiff = "0.10,1"
