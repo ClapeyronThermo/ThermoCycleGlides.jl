@@ -16,9 +16,9 @@ A mutable structure representing a vapour-compression heat pump thermodynamic pr
 - `pp_evap::T`: Pinch point temperature difference for evaporator [K].
 - `pp_cond::T`: Pinch point temperature difference for condensor [K].
 """
-mutable struct HeatPump{T<:Real} <: ThermoCycleProblem
-    fluid::EoSModel
-    z::AbstractVector{T}
+mutable struct HeatPump{E<:EoSModel,T<:Real,Z<:AbstractVector{T}} <: ThermoCycleProblem
+    fluid::E
+    z::Z
     T_evap_in::T
     T_evap_out::T
     ΔT_sh::T
@@ -56,7 +56,7 @@ function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,�
 
 
     type_promoted = promote_type(eltype(z), typeof(T_evap_in), typeof(T_evap_out), typeof(T_cond_in), typeof(T_cond_out), typeof(η_comp), typeof(pp_evap), typeof(pp_cond), typeof(ΔT_sh), typeof(ΔT_sc))
-    z_T = convert(Vector{type_promoted}, z)
+    z_T = map(zi -> convert(type_promoted, zi), z)
     ΔT_sh_T = convert(type_promoted, ΔT_sh)
     ΔT_sc_T = convert(type_promoted, ΔT_sc)
     T_evap_in_T = convert(type_promoted, T_evap_in)
@@ -68,7 +68,7 @@ function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,�
     pp_cond_T = convert(type_promoted, pp_cond)
     return HeatPump(
     fluid,         # EoSModel
-    z_T,             # AbstractVector{T}
+    z_T,             # Z<:AbstractVector{T}
     T_evap_in_T,   # T
     T_evap_out_T,  # T
     ΔT_sh_T,       # T
@@ -98,16 +98,16 @@ function COP(prob::HeatPump,sol::AbstractVector{T}) where {T<:Real}
 end
 
 """
-    HeatPumpRecuperator{T<:Real} <: ThermoCycleProblem
+    HeatPumpRecuperator{HP<:HeatPump,T<:Real} <: ThermoCycleProblem
 
 A mutable structure representing a heat pump cycle with an internal recuperator (economiser or heat exchanger) between the discharge and suction sides.
 
 # Fields
-- `hp::HeatPump{T}`: The base heat pump configuration, containing fluid properties and cycle parameters.
+- `hp::HP`: The base heat pump configuration, containing fluid properties and cycle parameters.
 - `ϵ::T`: Effectiveness of the recuperator (dimensionless, typically between 0 and 1).
 """
-mutable struct HeatPumpRecuperator{T<:Real} <:ThermoCycleProblem
-    hp::HeatPump{T}
+mutable struct HeatPumpRecuperator{HP<:HeatPump,T<:Real} <:ThermoCycleProblem
+    hp::HP
     ϵ::T
 end
 
@@ -203,8 +203,9 @@ function F(prob::HeatPump, x::AbstractVector{T}; N::Int) where {T<:Real}
     return SVector(ΔTpp_evap, ΔTpp_cond)  # avoids heap allocations
 end
 
-function F_pure(prob::HeatPump,x::AbstractVector{T}) where {T<:Real}
+function F_pure(prob::HeatPump{E,T,Z},x::AbstractVector{T2}) where {E,T,Z,T2<:Real}
     @assert length(x) == 2 "x must be a vector of length 2"
+    TT = promote_type(T, T2)
     p_evap,p_cond = x .* 101325 # convert to Pa
     T_sat_evap = saturation_temperature(prob.fluid,p_evap)[1]
     T_sat_cond = saturation_temperature(prob.fluid,p_cond)[1]
@@ -217,19 +218,33 @@ function F_pure(prob::HeatPump,x::AbstractVector{T}) where {T<:Real}
     h_cond_in = h_comp_out
     h_cond_vapour = Clapeyron.enthalpy(prob.fluid, p_cond, T_sat_cond, prob.z,phase =:vapour)
     h_cond_liquid = Clapeyron.enthalpy(prob.fluid, p_cond, T_sat_cond, prob.z,phase =:liquid)
-    h_cond_array = [h_cond_in,h_cond_vapour,h_cond_liquid,h_cond_out]
-    T_cond_array = Clapeyron.PH.temperature.(prob.fluid,p_cond,h_cond_array,prob.z)
+    h_cond_array = TT[h_cond_in,h_cond_vapour,h_cond_liquid,h_cond_out]
     T_cond_sf_f(h) = prob.T_cond_out - (h_cond_in - h)*(prob.T_cond_out - prob.T_cond_in)/(h_cond_in - h_cond_out)
-    ΔT_cond = minimum(T_cond_array .- T_cond_sf_f.(h_cond_array)) - prob.pp_cond
+    Δmin_cond = typemax(TT)
+    for h in h_cond_array
+        T_hx = Clapeyron.PH.temperature(prob.fluid, p_cond, h, prob.z)::TT
+        Δ = (T_hx - T_cond_sf_f(h))::TT
+        if Δ < Δmin_cond
+            Δmin_cond = Δ
+        end
+    end
+    ΔT_cond = (Δmin_cond - prob.pp_cond)::TT
     h_valve_in = h_cond_out;
     h_valve_out = h_valve_in # isenthalpic expansion
 
     h_evap_in = h_valve_out
     h_evap_sat_vapour = Clapeyron.enthalpy(prob.fluid, p_evap, T_sat_evap, prob.z,phase =:vapour)
-    h_evap_array = reverse([h_evap_in,h_evap_sat_vapour,h_evap_out])
-    T_evap_array = Clapeyron.PH.temperature.(prob.fluid,p_evap,h_evap_array,prob.z)
+    h_evap_array = reverse(TT[h_evap_in,h_evap_sat_vapour,h_evap_out])
     T_evap_sf_f(h) = prob.T_evap_in - (h_evap_out - h)*(prob.T_evap_in - prob.T_evap_out)/(h_evap_out - h_evap_in)
-    ΔT_evap = minimum(T_evap_sf_f.(h_evap_array) .- T_evap_array) - prob.pp_evap
+    Δmin_evap = typemax(TT)
+    for h in h_evap_array
+        T_hx = Clapeyron.PH.temperature(prob.fluid, p_evap, h, prob.z)::TT
+        Δ = (T_evap_sf_f(h) - T_hx)::TT
+        if Δ < Δmin_evap
+            Δmin_evap = Δ
+        end
+    end
+    ΔT_evap = (Δmin_evap - prob.pp_evap)::TT
     [ΔT_cond,ΔT_evap]
 end
 
@@ -864,4 +879,3 @@ function VHC(prob::HeatPump,sol::SolutionState)
 end
 
 export VHC
-

@@ -196,9 +196,9 @@ end
 - `max_iters::Int`: Maximum number of iterations
 - `autodiff::Bool`: A flag indicating whether automatic differentiation was used.
 - `fd_order::Int`: The order of finite difference used if autodiff is false.
-- `xtol::Real`: convergece criteria on `x`.
-- `ftol::Real`: convergece criteria on `f`.
-- `restart_TOL::Real`: Restrat strategy with tolerace.
+- `xtol::Float64`: convergece criteria on `x`.
+- `ftol::Float64`: convergece criteria on `f`.
+- `restart_TOL::Float64`: Restrat strategy with tolerace.
 - `internal_pinch::Bool` : Check for interal pinch for mixtures
 """
 mutable struct ThermoCycleParameters
@@ -206,9 +206,9 @@ mutable struct ThermoCycleParameters
     autodiff::Bool
     internal_pinch::Bool
     fd_order::Int
-    xtol::Real
-    ftol::Real
-    restart_TOL::Real
+    xtol::Float64
+    ftol::Float64
+    restart_TOL::Float64
     max_iters::Int
     x0_init::Symbol
     verbose::Bool
@@ -244,9 +244,20 @@ function switch_x0(x0_init::Symbol)
     end
 end
 
+function _build_residual(prob::HeatPump, N::Int)
+    if length(prob.fluid.components) == 1
+        return x -> F_pure(prob, x)
+    else
+        return x -> F(prob, x, N = N)
+    end
+end
+
+function _build_residual(prob::ThermoCycleProblem, N::Int)
+    return x -> F(prob, x, N = N)
+end
+
 function solve_ad(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-8,ftol = 1e-8,max_iter= 1000,x0_init::Symbol = :default,verbose::Bool = false)
-    f(x::AbstractVector{T}) where {T<:Real} = F(prob, x,N = N)
-    T = promote_type(typeof(lb), typeof(ub))
+    f = _build_residual(prob, N)
     x0 = generate_initial_point(prob,lb,ub,x0_init)
     sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter,verbose = verbose)
     sol.soltype = :subcritical
@@ -264,7 +275,7 @@ function solve_ad(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector
 end
 
 function solve_fd(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,fd_order = 2,xtol = 1e-8,ftol = 1e-8,max_iter= 1000,x0_init::Symbol = :default,verbose::Bool = false)
-    f(x::AbstractVector{T}) where {T<:Real} = F(prob, x,N = N)
+    f = _build_residual(prob, N)
     x0 = generate_initial_point(prob,lb,ub,x0_init) 
     sol = constrained_newton_fd(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter,fd_order = fd_order,verbose = verbose)
     sol.soltype = :subcritical
@@ -298,8 +309,44 @@ Define those problems in the respective structs.
 For now the default box-nonlinear solver is newton-raphson, but this can be changed to other solvers in the future.
 """
 function solve(prob::ThermoCycleProblem,param::ThermoCycleParameters)
-    return solve(prob,autodiff = param.autodiff,fd_order=param.fd_order,restart_TOL = param.restart_TOL,N = param.N,xtol = param.xtol,
-    ftol = param.ftol,max_iter= param.max_iters,x0_init = param.x0_init,verbose = param.verbose)
+    Base.@nospecialize prob
+    lb,ub = generate_box_solve_bounds(prob)
+    if param.autodiff
+        return _solve_with_params_ad(prob, param, lb, ub)
+    else
+        return _solve_with_params_fd(prob, param, lb, ub)
+    end
+end
+
+@noinline function _solve_with_params_fd(prob, param::ThermoCycleParameters, lb, ub)
+    return solve_fd(
+        prob,
+        lb,
+        ub;
+        N = param.N,
+        fd_order = param.fd_order,
+        restart_TOL = param.restart_TOL,
+        xtol = param.xtol,
+        ftol = param.ftol,
+        max_iter = param.max_iters,
+        x0_init = param.x0_init,
+        verbose = param.verbose,
+    )
+end
+
+@noinline function _solve_with_params_ad(prob, param::ThermoCycleParameters, lb, ub)
+    return solve_ad(
+        prob,
+        lb,
+        ub;
+        N = param.N,
+        restart_TOL = param.restart_TOL,
+        xtol = param.xtol,
+        ftol = param.ftol,
+        max_iter = param.max_iters,
+        x0_init = param.x0_init,
+        verbose = param.verbose,
+    )
 end
 
 export solve, ThermoCycleParameters
@@ -317,6 +364,4 @@ function show(io::IO,params::ThermoCycleParameters)
     println(io, "  x0_init         = ", params.x0_init)
     println(io, "  verbose         = ", params.verbose)
 end
-
-
 
