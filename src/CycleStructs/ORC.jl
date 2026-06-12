@@ -20,9 +20,9 @@ parameters specified in Kelvin and dimensionless efficiencies.
 - `pp_cond::T`: Minimum temperature difference (pinch point) at the condenser [K].
 
 """
-mutable struct ORC{T<:Real} <: ThermoCycleProblem
-    fluid::EoSModel
-    z::AbstractVector{T}
+mutable struct ORC{E<:EoSModel,T<:Real,Z<:AbstractVector{T}} <: ThermoCycleProblem
+    fluid::E
+    z::Z
     T_evap_in::T
     T_evap_out::T
     ΔT_sh::T
@@ -39,7 +39,7 @@ end
 function ORC(; fluid::EoSModel, z, T_evap_in, T_evap_out, T_cond_in, T_cond_out,
              η_pump, η_expander, pp_evap, pp_cond, ΔT_sh, ΔT_sc)
 
-    @assert fluid isa CubicModel || fluid isa SingleFluid || fluid isa MultiFluid "The type of EOS provided is not supported as of now."
+    #@assert fluid isa CubicModel || fluid isa SingleFluid || fluid isa MultiFluid "The type of EOS provided is not supported as of now."
 
     @assert length(z) > 0 "Composition vector z must not be empty"
     @assert length(fluid.components) == length(z) "Composition vector z must match number of fluid components"
@@ -82,7 +82,7 @@ function ORC(; fluid::EoSModel, z, T_evap_in, T_evap_out, T_cond_in, T_cond_out,
         typeof(ΔT_sh), typeof(ΔT_sc)
     )
 
-    z_T = convert(Vector{type_promoted}, z)
+    z_T = map(zi -> convert(type_promoted, zi), z)
     T_evap_in_T  = convert(type_promoted, T_evap_in)
     T_evap_out_T = convert(type_promoted, T_evap_out)
     T_cond_in_T  = convert(type_promoted, T_cond_in)
@@ -197,7 +197,6 @@ function F(prob::ORC, x::AbstractVector{T}; N::Int64) where {T<:Real}
     # Pump
     h_pump_in  = h_cond_out
     h_pump_out = ThermoCycleGlides.isentropic_pump(p_cond, p_evap, prob.η_pump, h_pump_in, prob.z, prob.fluid)
-
     # -------------------------
     # Evaporator pinch (NaN-safe)
     # -------------------------
@@ -308,8 +307,8 @@ extending the base `ORC` problem with a specified effectiveness.
 - `orc::ORC{T}`: Base ORC system definition containing the thermodynamic parameters.
 - `ϵ::T`: Effectiveness of the economiser (regenerator) [-].
 """
-mutable struct ORCEconomizer{T<:Real} <: ThermoCycleProblem
-    orc::ORC{T}
+mutable struct ORCEconomizer{orc_struct<:ORC,T<:Real} <: ThermoCycleProblem
+    orc::orc_struct
     ϵ::T
 end
 

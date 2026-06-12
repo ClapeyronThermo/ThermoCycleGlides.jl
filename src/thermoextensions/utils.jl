@@ -24,34 +24,37 @@ function isentropic_compressor(p_in::T1, p_out::T2, η_isen::T3, h_in::T4, z::Ab
     return ha
 end
 
-function isentropic_pump(p_in::T1, p_out::T2, η_isen::T3, h_in::T4, z::AbstractArray, fluid::EoSModel) where {T1<:Real, T2<:Real, T3<:Real, T4<:Real}
-    s_isen = Clapeyron.PH.entropy(fluid, p_in, h_in, z,phase = :liquid)
-    T_isen_out = Tproperty(fluid,p_out,s_isen,z,entropy,phase = :liquid)
-    h_isen = enthalpy(fluid,p_out,T_isen_out,z,phase = :liquid)
-    return h_in + (h_isen - h_in) / η_isen
+function isentropic_pump(p_in::T1, p_out::T2, η_isen::T3, h_in::T4, z::AbstractArray{TZ}, fluid::EoSModel) where {T1<:Real, T2<:Real, T3<:Real, T4<:Real, TZ<:Real}
+    TT = promote_type(T1, T2, T3, T4, TZ)
+    s_isen = Clapeyron.PH.entropy(fluid, p_in, h_in, z,phase = :liquid) ::TT
+    T_isen_out = Tproperty(fluid,p_out,s_isen,z,entropy,phase = :liquid)::TT
+    h_isen = enthalpy(fluid,p_out,T_isen_out,z,phase = :liquid)::TT
+    return (h_in + (h_isen - h_in) / η_isen) ::TT
 end
 
-function isentropic_expander(p_in::T1,p_out::T2,η_isen::T3,h_in::T4,z::AbstractVector,fluid::EoSModel) where {T1<:Real, T2<:Real, T3<:Real, T4<:Real}
-    s_isen = Clapeyron.PH.entropy(fluid, p_in, h_in,z) 
-    T_isen_out = Tproperty(fluid,p_out,s_isen,z,entropy,phase = :vapour)
-    h_isen = enthalpy(fluid,p_out,T_isen_out,z,phase = :vapour)
-    h_out = h_in - (h_in - h_isen) * η_isen
+function isentropic_expander(p_in::T1,p_out::T2,η_isen::T3,h_in::T4,z::AbstractVector{TZ},fluid::EoSModel) where {T1<:Real, T2<:Real, T3<:Real, T4<:Real, TZ<:Real}
+    TT = promote_type(T1, T2, T3, T4, TZ)
+    s_isen = Clapeyron.PH.entropy(fluid, p_in, h_in,z,phase = :vapour) ::TT
+    T_isen_out = Tproperty(fluid,p_out,s_isen,z,entropy,phase = :vapour)::TT
+    h_isen = enthalpy(fluid,p_out,T_isen_out,z,phase = :vapour)::TT
+    h_out = (h_in - (h_in - h_isen) * η_isen) ::TT
     # force outlet to be gaseous 
-    dt = Clapeyron.dew_temperature(fluid, p_out, z)[1]
-    h_gas = Clapeyron.enthalpy(fluid, p_out, dt, z,phase = :gas)
+    dt = Clapeyron.dew_temperature(fluid, p_out, z)[1]::TT
+    h_gas = Clapeyron.enthalpy(fluid, p_out, dt, z,phase = :gas)::TT
     # @show   values(dt), h_gas, h_out, p_in, p_out
     if h_out < h_gas
         # @warn "The outlet enthalpy is below the gas enthalpy. Adjusting to gas phase."
         h_out = h_gas 
     end
 
-    return h_out
+    return h_out::TT
 end
 
-function IHEX_Q(fluid::EoSModel,ϵ::T1,T_in_left::T2,p_in_left::T3,T_in_right::T4,p_in_right::T5,z::AbstractVector{T}) where {T<:Real,T1<:Real,T2<:Real,T3<:Real,T4<:Real,T5<:Real}
+function IHEX_Q(fluid::EoSModel,ϵ::T1,T_in_left::T2,p_in_left::T3,T_in_right::T4,p_in_right::T5,z::AbstractVector{TZ}) where {T1<:Real,T2<:Real,T3<:Real,T4<:Real,T5<:Real, TZ<:Real}
+    TT = promote_type(T1, T2, T3, T4, T5, TZ)
     T_in_left <= T_in_right && @warn  "Function assumse left fluid is hotter. This didn't happen. Now heat transfer will be negative."
-    c_in_left = Clapeyron.isobaric_heat_capacity(fluid,p_in_left,T_in_left,z)
-    c_in_right = Clapeyron.isobaric_heat_capacity(fluid,p_in_right,T_in_right,z)
+    c_in_left = Clapeyron.isobaric_heat_capacity(fluid,p_in_left,T_in_left,z) ::TT
+    c_in_right = Clapeyron.isobaric_heat_capacity(fluid,p_in_right,T_in_right,z) ::TT
     C = min(c_in_left,c_in_right)
     Qmax = C*(T_in_left - T_in_right)
     Q = Qmax*ϵ
@@ -84,3 +87,15 @@ function off_design_compressor_relation(fluid::EoSModel,z,η_isen_design,built_i
 end
 
 export off_design_compressor_relation, compute_isentropic_exponent
+function off_design_expander_relation(fluid::EoSModel,z,η_isen_design,built_in_volume_ratio;p_ref = 101325.0, T_ref = 300)
+    @assert 0.0 <= η_isen_design <= 1 "design point isentropic efficiecny should be between (0,1)"
+    @assert dew_temperature(fluid,p_ref,z)[1] ≤ T_ref "Reference state should be gas. Change p_ref or T_ref" 
+    κ = compute_isentropic_exponent(fluid,p_ref,T_ref,z)
+    πi = built_in_volume_ratio^κ
+    γ = (κ - 1)/κ
+    f(x) = η_isen_design*((x)^(γ) - 1)/(πi^γ - (γ*πi^(-1/κ))*(πi - x) - 1)
+    g(x) = f(1/x)
+    return g
+end
+
+export off_design_compressor_relation

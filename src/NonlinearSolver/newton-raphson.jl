@@ -105,7 +105,9 @@ function constrained_newton_fd(f::Function,x::Array{T,1},
     iter_ = 0
 
     f_calls = 0
-
+    if verbose
+        @info "Starting constrained Newton-Raphson with finite difference Jacobian (order $fd_order)"
+    end
     for iter in 1:iterations
         jk .= first(FiniteDifferences.jacobian(fd_method,f,xk))
         f_calls += fd_order*n # approx number of function calls for finite difference jacobian
@@ -154,6 +156,9 @@ function constrained_newton_ad(f::Function,x::Array{T,1},
     f_calls = 0
     lenx = one(T)
     lenf = one(T)
+    if verbose
+        @info "Starting constrained Newton-Raphson with automatic differentiation"
+    end
     for iter in 1:iterations
         jk = ForwardDiff.jacobian(f, xk)
         f_calls += 1

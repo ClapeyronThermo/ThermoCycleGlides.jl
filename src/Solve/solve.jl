@@ -252,6 +252,14 @@ function _build_residual(prob::HeatPump, N::Int)
     end
 end
 
+function _build_residual(prob::ORC, N::Int)
+    if length(prob.fluid.components) == 1
+        return x -> F_pure(prob, x)
+    else
+        return x -> F(prob, x, N = N)
+    end
+end
+
 function _build_residual(prob::ThermoCycleProblem, N::Int)
     return x -> F(prob, x, N = N)
 end
