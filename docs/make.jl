@@ -7,7 +7,7 @@ doctest = true,
 pages = [
     "Home" => "index.md",
     "Examples" => "examples.md",
-    "Optimization" => "optimization.md",
+    #"Optimization" => "optimization.md",
     # "Cycle Optimization" => "Optimization.md",
     "References" => "reference.md"
 ]
