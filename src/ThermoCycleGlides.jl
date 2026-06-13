@@ -33,8 +33,6 @@ include("CycleStructs/HeatPump.jl")
 #solve
 include("Solve/solve.jl")
 
-#Optimization
-include("Optimizations/Optimize.jl")
 
 
 #Plotting
