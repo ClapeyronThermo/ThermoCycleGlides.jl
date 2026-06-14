@@ -290,33 +290,33 @@ function _build_least_squares_objective(prob::ThermoCycleProblem, N)
     end
 end
 
-function solve_ad(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-8,ftol = 1e-8,max_iter= 1000,x0_init::Symbol = :default,verbose::Bool = false)
+function solve_ad(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-8,ftol = 1e-8,max_iters = 1000,x0_init::Symbol = :default,verbose::Bool = false)
     f = _build_residual(prob, N)
     x0 = generate_initial_point(prob,lb,ub,x0_init)
-    sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter,verbose = verbose)
+    sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, max_iters = max_iters,verbose = verbose)
     sol.soltype = :subcritical
     if norm(sol.residuals)  > restart_TOL
         # f(x::AbstractVector{T}) where {T<:Real} = F_transcritical(prob, x,N = N)
         # x0 = generate_bounds(prob,lb,ub)
-        # sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter)
+        # sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, max_iters = max_iters)
         # sol.soltype = :transcritical
         x0_init = switch_x0(x0_init)
         x0 = generate_initial_point(prob,lb,ub,x0_init)
-        sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter) 
+        sol = constrained_newton_ad(f, x0, lb, ub; xtol = xtol, ftol = ftol, max_iters = max_iters) 
         sol.soltype = :subcritical_restart_mode
     end
     return sol
 end
 
-function solve_fd(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,fd_order = 2,xtol = 1e-8,ftol = 1e-8,max_iter= 1000,x0_init::Symbol = :default,verbose::Bool = false)
+function solve_fd(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,fd_order = 2,xtol = 1e-8,ftol = 1e-8,max_iters = 1000,x0_init::Symbol = :default,verbose::Bool = false)
     f = _build_residual(prob, N)
     x0 = generate_initial_point(prob,lb,ub,x0_init)
-    sol = constrained_newton_fd(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter,fd_order = fd_order,verbose = verbose)
+    sol = constrained_newton_fd(f, x0, lb, ub; xtol = xtol, ftol = ftol, max_iters = max_iters,fd_order = fd_order,verbose = verbose)
     sol.soltype = :subcritical
     if norm(sol.residuals) > restart_TOL
         x0_init = switch_x0(x0_init)
         x0 = generate_initial_point(prob,lb,ub,x0_init)
-        sol = constrained_newton_fd(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter,fd_order = fd_order)
+        sol = constrained_newton_fd(f, x0, lb, ub; xtol = xtol, ftol = ftol, max_iters = max_iters,fd_order = fd_order)
         sol.soltype = :subcritical_restart_mode
     end
     return sol
@@ -328,8 +328,8 @@ Solves for pressure values in HP and ORC cycles for the given glide and problem 
 Define those problems in the respective structs. 
 For now the default box-nonlinear solver is newton-raphson, but this can be changed to other solvers in the future.
 """
-function CommonSolve.solve(prob::ThermoCycleProblem; autodiff::Union{Bool,Val{true},Val{false}} = Val(true), fd_order =2 , N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-6,ftol = 1e-6,max_iter= 1000,x0_init::Symbol=:default,verbose::Bool = false)
-    alg = ThermoCycleParameters(;autodiff,fd_order,N,restart_TOL,xtol,ftol,max_iter,x0_init,verbose)
+function CommonSolve.solve(prob::ThermoCycleProblem; autodiff::Union{Bool,Val{true},Val{false}} = Val(true), fd_order =2 , N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-6,ftol = 1e-6,max_iters = 1000,x0_init::Symbol=:default,verbose::Bool = false)
+    alg = ThermoCycleParameters(;autodiff,fd_order,N,restart_TOL,xtol,ftol,max_iters,x0_init,verbose)
     return CommonSolve.solve(prob,alg)
 end
 
@@ -354,7 +354,7 @@ end
         restart_TOL = param.restart_TOL,
         xtol = param.xtol,
         ftol = param.ftol,
-        max_iter = param.max_iters,
+        max_iters = param.max_iters,
         x0_init = param.x0_init,
         verbose = param.verbose,
     )
@@ -369,7 +369,7 @@ end
         restart_TOL = param.restart_TOL,
         xtol = param.xtol,
         ftol = param.ftol,
-        max_iter = param.max_iters,
+        max_iters = param.max_iters,
         x0_init = param.x0_init,
         verbose = param.verbose,
     )
