@@ -1,9 +1,4 @@
 
-function norm(x)
-    return sqrt(sum(x.^2))
-end
-
-
 function constrained_newton_verbose_step(xn,fxn,iter,lenx,lenf)
     @info "Iteration: $iter, x: $xn, f(x): $fxn, lenx: $lenx, lenf: $lenf"
 end
@@ -89,7 +84,7 @@ end
 
 
 function constrained_newton_fd(f::Function,x::Array{T,1},
-    lb::Array{TT,1},ub::Array{TTT,1};xtol::TOL=1e-16,ftol::TOL=1e-16,iterations::S=100,
+    lb::Array{TT,1},ub::Array{TTT,1};xtol::TOL=1e-16,ftol::TOL=1e-16,max_iters::S=100,
     fd_order::M = 2,verbose::Bool=false) where  {T <: Real, S <: Integer, TT <: Real, TTT <: Real, M <: Int,TOL<:Real}
 
     fd_method  = central_fdm(fd_order,1)
@@ -108,7 +103,7 @@ function constrained_newton_fd(f::Function,x::Array{T,1},
     if verbose
         @info "Starting constrained Newton-Raphson with finite difference Jacobian (order $fd_order)"
     end
-    for iter in 1:iterations
+    for iter in 1:max_iters
         jk .= first(FiniteDifferences.jacobian(fd_method,f,xk))
         f_calls += fd_order*n # approx number of function calls for finite difference jacobian
         if !all(isfinite,jk)
@@ -131,7 +126,7 @@ function constrained_newton_fd(f::Function,x::Array{T,1},
         xk .= xn
 
         iter_ += 1
-        if iter_ >= iterations || (lenx <= xtol || lenf <= ftol)
+        if iter_ >= max_iters || (lenx <= xtol || lenf <= ftol)
             break
         end
         if verbose
@@ -143,7 +138,7 @@ function constrained_newton_fd(f::Function,x::Array{T,1},
 end
 
 function constrained_newton_ad(f::Function,x::Array{T,1},
-    lb::Array{TT,1},ub::Array{TTT,1};xtol::TOL=1e-16,ftol::TOL=1e-16,iterations::S=100,verbose::Bool=false) where 
+    lb::Array{TT,1},ub::Array{TTT,1};xtol::TOL=1e-16,ftol::TOL=1e-16,max_iters::S=100,verbose::Bool=false) where 
     {T <: Real, S <: Integer, TT <: Real, TTT <: Real,TOL<:Real}
 
     type_promoted = promote_type(eltype(x), eltype(lb), eltype(ub))
@@ -159,7 +154,7 @@ function constrained_newton_ad(f::Function,x::Array{T,1},
     if verbose
         @info "Starting constrained Newton-Raphson with automatic differentiation"
     end
-    for iter in 1:iterations
+    for iter in 1:max_iters
         jk = ForwardDiff.jacobian(f, xk)
         f_calls += 1
         fx = f(xk)
@@ -173,7 +168,7 @@ function constrained_newton_ad(f::Function,x::Array{T,1},
         lenx = norm((xn.-xk))/norm(xk)
         lenf = norm(f(xn))
         iter_ += 1
-        if iter >= iterations || (lenx <= xtol || lenf <= ftol)
+        if iter >= max_iters || (lenx <= xtol || lenf <= ftol)
             break
         end
 

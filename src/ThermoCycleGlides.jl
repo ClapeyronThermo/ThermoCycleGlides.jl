@@ -4,7 +4,8 @@ using Clapeyron, Polynomials, Interpolations, FiniteDifferences
 using ForwardDiff#, LinearAlgebra
 using StaticArrays
 using RecipesBase
-
+using CommonSolve
+using CommonSolve: solve
 # import LinearAlgebra: norm, rank
 import Base: show, length, copy, similar, promote_type
 
@@ -17,6 +18,7 @@ abstract type ThermoCycleProblem end
 
 
 #NonlinearSolver - NR
+norm(x) = sqrt(sum(abs2,x))
 include("NonlinearSolver/newton-raphson.jl")
 
 # Thermo-fixes
