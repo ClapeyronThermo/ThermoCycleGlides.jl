@@ -201,9 +201,9 @@ end
 - `restart_TOL::Float64`: Restrat strategy with tolerace.
 - `internal_pinch::Bool` : Check for interal pinch for mixtures
 """
-mutable struct ThermoCycleParameters
+mutable struct ThermoCycleParameters{AD}
     N::Int
-    autodiff::Bool
+    autodiff::Val{AD}
     internal_pinch::Bool
     fd_order::Int
     xtol::Float64
@@ -216,7 +216,7 @@ end
 
 function ThermoCycleParameters(; 
     N::Int = 20,
-    autodiff::Bool = true,
+    autodiff::Union{Bool,Val{true},Val{false}} = Val{true}(),
     internal_pinch::Bool = true,
     fd_order::Int = 2,
     xtol::Real = 1e-6,
@@ -227,13 +227,16 @@ function ThermoCycleParameters(;
     verbose::Bool = false
 )
     N > 0 || error("N must be positive")
-    if !autodiff && fd_order < 2
+    is_ad = autodiff == false || autodiff == Val{false}()
+    if !is_ad && fd_order < 2
         error("If autodiff is false, fd_order must be ≥ 2 (higher-order finite differences required).")
     end
-    @assert x0_init == :default || x0_init == :average "x0 initizer has two versions :default and :average" 
-    return ThermoCycleParameters(N, autodiff, internal_pinch, fd_order, xtol, ftol, restart_TOL, max_iters,x0_init, verbose)
-end
 
+    ad_typed = autodiff isa Bool ? Val(autodiff) : autodiff
+
+    @assert x0_init == :default || x0_init == :average "x0 initizer has two versions :default and :average" 
+    return ThermoCycleParameters(N, ad_typed, internal_pinch, fd_order, xtol, ftol, restart_TOL, max_iters,x0_init, verbose)
+end
 
 function switch_x0(x0_init::Symbol)
     if x0_init == :default
@@ -242,26 +245,49 @@ function switch_x0(x0_init::Symbol)
     if x0_init == :average
         return :default
     end
+    return :invalid_switch_x0
 end
 
 function _build_residual(prob::HeatPump, N::Int)
-    if length(prob.fluid.components) == 1
-        return x -> F_pure(prob, x)
-    else
-        return x -> F(prob, x, N = N)
+    f = let prob = prob, N = N
+        x -> begin 
+            nc = length(prob.fluid.components)
+            return nc == 1 ? F_pure(prob, x) : F(prob, x, N = N)
+        end
     end
 end
 
 function _build_residual(prob::ORC, N::Int)
-    if length(prob.fluid.components) == 1
-        return x -> F_pure(prob, x)
-    else
-        return x -> F(prob, x, N = N)
+    f = let prob = prob, N = N
+        x -> begin 
+            nc = length(prob.fluid.components)
+            return nc == 1 ? F_pure(prob, x) : F(prob, x, N = N)
+        end
     end
 end
 
 function _build_residual(prob::ThermoCycleProblem, N::Int)
     return x -> F(prob, x, N = N)
+end
+
+function _build_least_squares_objective(prob, N)
+    f = let prob = prob, N = N
+        x -> begin 
+            nc = length(prob.fluid.components)
+            θ = nc == 1 ? F_pure(prob, x) : F(prob, x, N = N)
+            return sum(abs2,θ)/2
+        end
+    end
+end
+
+function _build_least_squares_objective(prob::ThermoCycleProblem, N)
+    f = let prob = prob, N = N
+        x -> begin 
+            nc = length(prob.fluid.components)
+            θ = F(prob, x, N = N)
+            return sum(abs2,θ)/2
+        end
+    end
 end
 
 function solve_ad(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-8,ftol = 1e-8,max_iter= 1000,x0_init::Symbol = :default,verbose::Bool = false)
@@ -284,7 +310,7 @@ end
 
 function solve_fd(prob::ThermoCycleProblem,lb::AbstractVector,ub::AbstractVector;N::Int64 = 20,restart_TOL = 1e-3,fd_order = 2,xtol = 1e-8,ftol = 1e-8,max_iter= 1000,x0_init::Symbol = :default,verbose::Bool = false)
     f = _build_residual(prob, N)
-    x0 = generate_initial_point(prob,lb,ub,x0_init) 
+    x0 = generate_initial_point(prob,lb,ub,x0_init)
     sol = constrained_newton_fd(f, x0, lb, ub; xtol = xtol, ftol = ftol, iterations = max_iter,fd_order = fd_order,verbose = verbose)
     sol.soltype = :subcritical
     if norm(sol.residuals) > restart_TOL
@@ -302,13 +328,9 @@ Solves for pressure values in HP and ORC cycles for the given glide and problem 
 Define those problems in the respective structs. 
 For now the default box-nonlinear solver is newton-raphson, but this can be changed to other solvers in the future.
 """
-function solve(prob::ThermoCycleProblem;autodiff::Bool = true, fd_order =2 , N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-6,ftol = 1e-6,max_iter= 1000,x0_init::Symbol=:default,verbose::Bool = false)
-    lb,ub = generate_box_solve_bounds(prob)
-    if autodiff
-        return sol = solve_ad(prob, lb, ub, N = N, restart_TOL = restart_TOL, xtol = xtol, ftol = ftol, max_iter = max_iter,x0_init=x0_init,verbose=verbose)
-    else
-        return sol = solve_fd(prob, lb, ub, N = N,fd_order = fd_order,restart_TOL = restart_TOL, xtol = xtol, ftol = ftol, max_iter = max_iter,x0_init = x0_init,verbose=verbose) 
-    end
+function CommonSolve.solve(prob::ThermoCycleProblem; autodiff::Union{Bool,Val{true},Val{false}} = Val(true), fd_order =2 , N::Int64 = 20,restart_TOL = 1e-3,xtol = 1e-6,ftol = 1e-6,max_iter= 1000,x0_init::Symbol=:default,verbose::Bool = false)
+    alg = ThermoCycleParameters(;autodiff,fd_order,N,restart_TOL,xtol,ftol,max_iter,x0_init,verbose)
+    return CommonSolve.solve(prob,alg)
 end
 
 """
@@ -319,14 +341,10 @@ For now the default box-nonlinear solver is newton-raphson, but this can be chan
 function solve(prob::ThermoCycleProblem,param::ThermoCycleParameters)
     Base.@nospecialize prob
     lb,ub = generate_box_solve_bounds(prob)
-    if param.autodiff
-        return _solve_with_params_ad(prob, param, lb, ub)
-    else
-        return _solve_with_params_fd(prob, param, lb, ub)
-    end
+    return _solve_with_params(prob, param, lb, ub)
 end
 
-@noinline function _solve_with_params_fd(prob, param::ThermoCycleParameters, lb, ub)
+@noinline function _solve_with_params(prob, param::ThermoCycleParameters{false}, lb, ub)
     return solve_fd(
         prob,
         lb,
@@ -342,7 +360,7 @@ end
     )
 end
 
-@noinline function _solve_with_params_ad(prob, param::ThermoCycleParameters, lb, ub)
+@noinline function _solve_with_params(prob, param::ThermoCycleParameters{true}, lb, ub)
     return solve_ad(
         prob,
         lb,

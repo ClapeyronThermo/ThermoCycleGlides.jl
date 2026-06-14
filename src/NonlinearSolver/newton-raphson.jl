@@ -1,9 +1,4 @@
 
-function norm(x)
-    return sqrt(sum(x.^2))
-end
-
-
 function constrained_newton_verbose_step(xn,fxn,iter,lenx,lenf)
     @info "Iteration: $iter, x: $xn, f(x): $fxn, lenx: $lenx, lenf: $lenf"
 end
