@@ -338,7 +338,7 @@ Solves for pressure values in HP and ORC cycles for the given glide and problem 
 Define those problems in the respective structs. 
 For now the default box-nonlinear solver is newton-raphson, but this can be changed to other solvers in the future.
 """
-function solve(prob::ThermoCycleProblem,param::ThermoCycleParameters)
+function CommonSolve.solve(prob::ThermoCycleProblem,param::ThermoCycleParameters)
     Base.@nospecialize prob
     lb,ub = generate_box_solve_bounds(prob)
     return _solve_with_params(prob, param, lb, ub)
