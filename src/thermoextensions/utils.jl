@@ -7,7 +7,7 @@ function isentropic_ideal_gas_out_temp(p_in,T_in,p_out,Cv = 1.5*Clapeyron.Rgas()
     (Cv - R)*log(Tout/Tin) = -R*log(pout/pin)
     =#
     dlogT = (-R/(Cv - R))*log(p_out/p_in)
-    log_T_out = dlogT - log(T_in)
+    log_T_out = dlogT + log(T_in)
     return exp(log_T_out)
 end
 
@@ -25,7 +25,8 @@ function isentropic_compressor(p_in::T1, p_out::T2, η_isen::T3, h_in::T4, z::Ab
 
     T0_isen_out = isnan(T_dew) ? isentropic_ideal_gas_out_temp(p_in,T_in,p_out) : T_dew
     
-    T_isen_out = Clapeyron.PS.temperature(fluid,p_out,s_isen,z,entropy, phase = :vapour,T0 = T0_isen_out)::TT
+    #T_isen_out = Clapeyron.PS.temperature(fluid,p_out,s_isen,z, phase = :vapour,T0 = T0_isen_out)::TT
+    T_isen_out = Clapeyron.Tproperty(fluid,p_out,s_isen,z,entropy, phase = :vapour,T0 = T0_isen_out)::TT
     h_isen = enthalpy(fluid,p_out,T_isen_out,z, phase = :vapour)::TT
 
     # h_isen = Clapeyron.PS.enthalpy(fluid, p_out, s_isen, z)
