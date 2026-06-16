@@ -17,13 +17,13 @@ function isentropic_compressor(p_in::T1, p_out::T2, η_isen::T3, h_in::T4, z::Ab
     s_isen = Clapeyron.entropy(fluid, p_in, T_in, z, phase = :vapour)::TT
     # T_in = Tproperty(fluid,p_in,h_in,z,enthalpy,phase = :vapour)
     
-    if isnothing(Tdew) || (Tdew isa Number && isnan(Tdew))
+    if isnothing(Tdew) #|| (Tdew isa Number && isnan(Tdew))
         T_dew = dew_temperature(fluid,p_out,z)[1]::TT
     else
         T_dew = TT(Tdew)
     end
 
-    T0_isen_out = isnan(T_dew) ? isentropic_ideal_gas_out_temp(p_in,T_in,p_out): T_dew
+    T0_isen_out = isnan(T_dew) ? isentropic_ideal_gas_out_temp(p_in,T_in,p_out) : T_dew
     
     T_isen_out = Clapeyron.PS.temperature(fluid,p_out,s_isen,z,entropy, phase = :vapour,T0 = T0_isen_out)::TT
     h_isen = enthalpy(fluid,p_out,T_isen_out,z, phase = :vapour)::TT
