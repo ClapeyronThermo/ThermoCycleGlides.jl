@@ -15,6 +15,9 @@ A mutable structure representing a vapour-compression heat pump thermodynamic pr
 - `η_comp::T`: Isentropic efficiency of the compressor [-].
 - `pp_evap::T`: Pinch point temperature difference for evaporator [K].
 - `pp_cond::T`: Pinch point temperature difference for condensor [K].
+
+# Optional arguments
+- `check_subcritical` = true: checks if the input conditions (inlet temperature minus pinch point) are actually below the mixture critical point.
 """
 mutable struct HeatPump{E<:EoSModel,T<:Real,Z<:AbstractVector{T}} <: ThermoCycleProblem
     fluid::E
@@ -28,9 +31,24 @@ mutable struct HeatPump{E<:EoSModel,T<:Real,Z<:AbstractVector{T}} <: ThermoCycle
     η_comp::T
     pp_evap::T
     pp_cond::T
+    crit::NTuple{3,T}
 end
 
-function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,η_comp,pp_evap,pp_cond,ΔT_sh,ΔT_sc)
+function crit_mix!(model::HeatPump{E,T}) where {E,T}
+    #TODO: this is probably not thread safe. safeguard this function behind a lock
+    crit0 = model.crit
+    if crit0 == (T(-1),T(-1),T(-1))
+        Tc,Pc,Vc = crit_mix(model.fluid,model.z)
+        model.crit = (T(Tc),T(Pc),T(Vc))
+        return model.crit
+    else
+        return crit0
+    end
+end
+
+crit_mix!(model::EoSModel,z) = crit_mix(model,z)
+
+function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,η_comp,pp_evap,pp_cond,ΔT_sh,ΔT_sc,check_subcritical = true)
     @assert fluid isa CubicModel || fluid isa SingleFluid || fluid isa MultiFluid "The type of EOS provided is not supported as of now."
     #default assertions
     @assert length(z) > 0 "Composition vector z must not be empty"
@@ -50,10 +68,13 @@ function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,�
         T_evap_out = T_cond_in
     end
     # inlet temperature of the condensor should be subcritical - pinch point
-    Tcrit,_,_ = crit_mix(fluid,z)
-    @assert T_cond_in < Tcrit - pp_cond "Condenser inlet temperature must be less than critical temperature ($Tcrit) minus pinch point ($pp_cond) for the heat pump to function properly"
-
-
+    if check_subcritical
+        T_crit,P_crit,V_crit = crit_mix(fluid,z)
+        @assert T_cond_in < T_crit - pp_cond "Condenser inlet temperature must be less than critical temperature ($Tcrit) minus pinch point ($pp_cond) for the heat pump to function properly"
+    else
+        T_crit = convert(Base.promote_eltype(fluid,z),-1)
+        P_crit,V_crit = T_crit,T_crit
+    end
 
     type_promoted = promote_type(eltype(z), typeof(T_evap_in), typeof(T_evap_out), typeof(T_cond_in), typeof(T_cond_out), typeof(η_comp), typeof(pp_evap), typeof(pp_cond), typeof(ΔT_sh), typeof(ΔT_sc))
     z_T = map(zi -> convert(type_promoted, zi), z)
@@ -66,6 +87,7 @@ function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,�
     η_comp_T = convert(type_promoted, η_comp)
     pp_evap_T = convert(type_promoted, pp_evap)
     pp_cond_T = convert(type_promoted, pp_cond)
+    crit_T = (T(T_crit),T(P_crit),T(V_crit))
     return HeatPump(
     fluid,         # EoSModel
     z_T,             # Z<:AbstractVector{T}
@@ -77,7 +99,8 @@ function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,�
     ΔT_sc_T,       # T
     η_comp_T,      # T
     pp_evap_T,     # T
-    pp_cond_T      # T
+    pp_cond_T,     # T
+    crit_T,        # T
 )
 end
 
@@ -88,8 +111,9 @@ function COP(prob::HeatPump,sol::AbstractVector{T}) where {T<:Real}
     T_evap_out = dew_temperature(prob.fluid, p_evap, prob.z)[1] + prob.ΔT_sh 
     h_evap_out = Clapeyron.enthalpy(prob.fluid, p_evap, T_evap_out, prob.z)
 
-    h_comp_in = h_evap_out; 
-    h_comp_out = isentropic_compressor(p_evap, p_cond, prob.η_comp, h_comp_in, prob.z, prob.fluid)
+    h_comp_in = h_evap_out;
+    crit = crit_mix!(prob)
+    h_comp_out = isentropic_compressor(p_evap, p_cond, prob.η_comp, h_comp_in, prob.z, prob.fluid, crit)
 
     T_cond_out = Clapeyron.bubble_temperature(prob.fluid, p_cond, prob.z)[1] - prob.ΔT_sc
     h_cond_out = Clapeyron.enthalpy(prob.fluid, p_cond, T_cond_out, prob.z)
@@ -117,7 +141,7 @@ function HeatPumpRecuperator(;hp::HeatPump,ϵ)
     return HeatPumpRecuperator(hp,ϵ)
 end
 
-
+crit_mix!(model::HeatPumpRecuperator) = crit_mix!(model.hp)
 
 function show_parameters(prob::HeatPump)
     println("Heat Pump Parameters:")
@@ -157,8 +181,9 @@ function F(prob::HeatPump, x::AbstractVector{T}; N::Int) where {T<:Real}
     h_evap_out = Clapeyron.enthalpy(prob.fluid, p_evap, T_evap_out, prob.z)
 
     # compressor
+    crit = crit_mix!(prob)
     h_comp_out = isentropic_compressor(p_evap, p_cond, prob.η_comp,
-                                       h_evap_out, prob.z, prob.fluid)
+                                       h_evap_out, prob.z, prob.fluid, crit)
 
     # condenser outlet
     T_cond_out = Clapeyron.temperature(prob.fluid, flash_res0_cond) - prob.ΔT_sc
@@ -212,7 +237,8 @@ function F_pure(prob::HeatPump{E,T,Z},x::AbstractVector{T2}) where {E,T,Z,T2<:Re
     T_evap_out = T_sat_evap + prob.ΔT_sh
     h_evap_out = Clapeyron.enthalpy(prob.fluid, p_evap, T_evap_out, prob.z)
     h_comp_in = h_evap_out;
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_comp_in, prob.z, prob.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_comp_in, prob.z, prob.fluid, crit, T_sat_cond)
     T_cond_out = T_sat_cond - prob.ΔT_sc
     h_cond_out = Clapeyron.enthalpy(prob.fluid, p_cond, T_cond_out, prob.z)
     h_cond_in = h_comp_out
@@ -257,7 +283,8 @@ function power_ratings(prob::HeatPump,sol::AbstractVector{T}) where T
     T_out_evap = dew_temperature(prob.fluid,p_evap,prob.z)[1] + prob.ΔT_sh
     h_out_evap = enthalpy(prob.fluid,p_evap,T_out_evap,prob.z)
     h_in_comp = h_out_evap;
-    h_out_comp = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_in_comp, prob.z, prob.fluid)
+    crit = crit_mix!(prob)
+    h_out_comp = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_in_comp, prob.z, prob.fluid, crit)
     Δh_comp = h_out_comp - h_in_comp
     if Δh_comp < 0
         @warn "something wrong in the system. Change in enthalpy of the fluid after compressor should be positive"
@@ -300,7 +327,8 @@ function F_pure(prob::HeatPumpRecuperator,x::AbstractVector{T}) where {T<:Real}
     h_evap_out = Clapeyron.enthalpy(prob.hp.fluid, p_evap, T_evap_out, prob.hp.z) 
     h_recup_out_comp_end = h_evap_out + q_ihex
     h_comp_in = h_recup_out_comp_end;
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid, crit, T_sat_cond)
     h_cond_in = h_comp_out
     h_cond_vapour = Clapeyron.enthalpy(prob.hp.fluid, p_cond, T_sat_cond, prob.hp.z,phase =:vapour)
     h_cond_liquid = Clapeyron.enthalpy(prob.hp.fluid, p_cond, T_sat_cond, prob.hp.z,phase =:liquid)
@@ -344,7 +372,8 @@ function F(prob::HeatPumpRecuperator,x::AbstractVector{T};N::Int64) where {T<:Re
     h_evap_out = Clapeyron.enthalpy(prob.hp.fluid, p_evap, T_evap_out, prob.hp.z) 
     h_recup_out_comp_end = h_evap_out + q_ihex
     h_comp_in = h_recup_out_comp_end;
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid, crit)
     h_cond_in = h_comp_out
     T_cond(h) = Clapeyron.PH.temperature(prob.hp.fluid, p_cond, h, prob.hp.z)
     T_evap(h) = Clapeyron.PH.temperature(prob.hp.fluid, p_evap, h, prob.hp.z)
@@ -387,7 +416,8 @@ function COP(prob::HeatPumpRecuperator,sol::AbstractVector{T}) where {T<:Real}
     T_cond_out = bubble_temperature(prob.hp.fluid, p_cond, prob.hp.z)[1] - prob.hp.ΔT_sc
     q_ihex = ThermoCycleGlides.IHEX_Q(prob.hp.fluid,prob.ϵ,T_cond_out, p_cond, T_evap_out, p_evap, prob.hp.z)
     h_comp_in = h_evap_out + q_ihex;
-    h_comp_out = isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid, crit)
 
     h_cond_out = Clapeyron.enthalpy(prob.hp.fluid, p_cond, T_cond_out, prob.hp.z)
 
@@ -412,7 +442,8 @@ function power_ratings(prob::HeatPumpRecuperator,sol::AbstractVector{T}) where T
 
     h_recup_out_comp_end = Clapeyron.enthalpy(prob.hp.fluid, p_evap, T_evap_out, prob.hp.z) + q_ihex
     h_in_comp = h_recup_out_comp_end;
-    h_out_comp = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_in_comp, prob.hp.z, prob.hp.fluid)
+    crit = crit_mix!(prob)
+    h_out_comp = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_in_comp, prob.hp.z, prob.hp.fluid, crit)
     Δh_comp = h_out_comp - h_in_comp
     if Δh_comp < 0
         @warn "something wrong in the system. Change in enthalpy of the fluid after compressor should be positive"
@@ -459,7 +490,8 @@ function F_super(prob::HeatPump,x::AbstractVector,pcrit::Real,Tcrit::Real;N::Int
     T_evap_out = bubble_temperature(prob.fluid,p_evap,prob.z)[1] + prob.ΔT_sh
     h_evap_out = Clapeyron.enthalpy(prob.fluid,p_evap,T_evap_out,prob.z,phase = :vapour)
     
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap,p_cond,prob.η_comp,h_evap_out,prob.z,prob.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap,p_cond,prob.η_comp,h_evap_out,prob.z,prob.fluid,crit)
     T_comp_out = Clapeyron.PH.temperature(prob.fluid,p_cond,h_comp_out,prob.z)
     
     T_cond_in = T_comp_out
@@ -501,16 +533,20 @@ function _F(prob::HeatPump, x::AbstractVector{T}) where {T<:Real}
     p_evap = x[1] * 101_325
     p_cond = x[2] * 101_325
 
+    #dew temp, used in isentropic compressor
+    T_cond_dew = dew_temperature(prob.fluid,p_cond,prob.z)[1]
+
     # evaporator outlet
     T_evap_out = dew_temperature(prob.fluid, p_evap, prob.z)[1] + prob.ΔT_sh
     h_evap_out = Clapeyron.enthalpy(prob.fluid, p_evap, T_evap_out, prob.z)
 
     # compressor
+    crit = crit_mix!(prob)
     h_comp_out = isentropic_compressor(p_evap, p_cond, prob.η_comp,
-                                       h_evap_out, prob.z, prob.fluid)
+                                       h_evap_out, prob.z, prob.fluid, crit, T_cond_dew)
     h_cond_in = h_comp_out
     T_cond_in = Clapeyron.PH.temperature(prob.fluid,p_cond,h_cond_in,prob.z)
-    T_cond_dew = dew_temperature(prob.fluid,p_cond,prob.z)[1]
+    
     T_cond_bub = bubble_temperature(prob.fluid,p_cond,prob.z)[1]
     h_cond_vapour = Clapeyron.enthalpy(prob.fluid,p_cond,T_cond_dew,prob.z)
     h_cond_liquid = Clapeyron.enthalpy(prob.fluid,p_cond,T_cond_bub,prob.z)
@@ -554,7 +590,8 @@ function get_states(prob::HeatPump,sol::SolutionState)
     h_evap_out_spec = enthalpy(prob.fluid,p_evap,T_evap_out,prob.z)./Clapeyron.molecular_weight(prob.fluid,prob.z)
     s_evap_out_spec = entropy(prob.fluid,p_evap,T_evap_out,prob.z)./Clapeyron.molecular_weight(prob.fluid,prob.z)
 
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap,p_cond,prob.η_comp,h_evap_out,prob.z,prob.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap,p_cond,prob.η_comp,h_evap_out,prob.z,prob.fluid,crit)
     T_comp_out = Clapeyron.PH.temperature(prob.fluid,p_cond,h_comp_out,prob.z)
     s_comp_out_spec = entropy(prob.fluid,p_cond,T_comp_out,prob.z)./Clapeyron.molecular_weight(prob.fluid,prob.z)
     h_comp_out_spec = enthalpy(prob.fluid,p_cond,T_comp_out,prob.z)./Clapeyron.molecular_weight(prob.fluid,prob.z)
@@ -600,7 +637,8 @@ function get_states(prob::HeatPumpRecuperator,sol::SolutionState)
     T_recup_out_comp_end = Clapeyron.PH.temperature(prob.hp.fluid,p_evap,h_recup_out_comp_end,prob.hp.z)
     s_recup_out_comp_end_spec = entropy(prob.hp.fluid,p_evap,T_recup_out_comp_end,prob.hp.z)./Clapeyron.molecular_weight(prob.hp.fluid,prob.hp.z)
     h_recup_out_comp_end_spec = h_recup_out_comp_end./Clapeyron.molecular_weight(prob.hp.fluid,prob.hp.z)
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap,p_cond,prob.hp.η_comp,h_recup_out_comp_end,prob.hp.z,prob.hp.fluid)
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap,p_cond,prob.hp.η_comp,h_recup_out_comp_end,prob.hp.z,prob.hp.fluid,crit)
     T_comp_out = Clapeyron.PH.temperature(prob.hp.fluid,p_cond,h_comp_out,prob.hp.z)
     s_comp_out_spec = entropy(prob.hp.fluid,p_cond,T_comp_out,prob.hp.z)./Clapeyron.molecular_weight(prob.hp.fluid,prob.hp.z)
     h_comp_out_spec = h_comp_out./Clapeyron.molecular_weight(prob.hp.fluid,prob.hp.z)
@@ -641,9 +679,9 @@ function get_states(prob::HeatPumpRecuperator,sol::SolutionState)
 end
 
 
-mutable struct HeatPumpVarEff{F<:Function,T<:Real} <: ThermoCycleProblem
+mutable struct HeatPumpVarEff{E,F<:Function,T<:Real} <: ThermoCycleProblem
     η_comp::F
-    fluid::EoSModel
+    fluid::E
     z::AbstractVector{T}
     T_evap_in::T
     T_evap_out::T
@@ -653,6 +691,7 @@ mutable struct HeatPumpVarEff{F<:Function,T<:Real} <: ThermoCycleProblem
     ΔT_sc::T
     pp_evap::T
     pp_cond::T
+    crit::NTuple{3,T}
 end
 
 
@@ -667,7 +706,8 @@ function HeatPumpVarEff(;
     pp_evap,
     pp_cond,
     ΔT_sh,
-    ΔT_sc
+    ΔT_sc,
+    check_subcritical = true,
     ) where {F<:Function}
 
     @assert fluid isa CubicModel || fluid isa SingleFluid || fluid isa MultiFluid "The type of EOS provided is not supported as of now."
@@ -694,9 +734,13 @@ function HeatPumpVarEff(;
     end
 
     # inlet temperature of the condenser should be subcritical - pinch point
-    Tcrit, _, _ = crit_mix(fluid, z)
-    @assert T_cond_in < Tcrit - pp_cond "Condenser inlet temperature must be less than critical temperature ($Tcrit) minus pinch point ($pp_cond)"
-
+    if check_subcritical
+        T_crit, P_crit, V_crit = crit_mix(fluid, z)
+        @assert T_cond_in < T_crit - pp_cond "Condenser inlet temperature must be less than critical temperature ($Tcrit) minus pinch point ($pp_cond)"
+    else
+        T_crit = convert(Base.promote_eltype(fluid,z),-1)
+        P_crit,V_crit = T_crit,T_crit
+    end
     # type promotion
     type_promoted = promote_type(
         eltype(z),
@@ -719,7 +763,7 @@ function HeatPumpVarEff(;
     pp_cond_T    = convert(type_promoted, pp_cond)
     ΔT_sh_T      = convert(type_promoted, ΔT_sh)
     ΔT_sc_T      = convert(type_promoted, ΔT_sc)
-
+    crit_T       = (T(T_crit),T(P_crit),T(V_crit))
     return HeatPumpVarEff{F,type_promoted}(
         η_comp,        # Function
         fluid,         # EoSModel
@@ -731,11 +775,22 @@ function HeatPumpVarEff(;
         T_cond_out_T,  # T
         ΔT_sc_T,       # T
         pp_evap_T,     # T
-        pp_cond_T      # T
+        pp_cond_T,     # T
+        crit_T,        # NTuple{3,T}
     )
 end
 
-
+function crit_mix!(model::HeatPumpVarEff{F,E,T}) where {F,E,T}
+    #TODO: this is probably not thread safe. safeguard this function behind a lock
+    crit0 = model.crit
+    if crit0 == (T(-1),T(-1),T(-1))
+        Tc,Pc,Vc = crit_mix(model.fluid,model.z)
+        model.crit = (T(Tc),T(Pc),T(Vc))
+        return model.crit
+    else
+        return crit0
+    end
+end
 
 function F_pure(prob::HeatPumpVarEff,x::AbstractVector{T}) where {T<:Real}
     @assert length(x) == 2 "x must be a vector of length 2"
@@ -746,7 +801,9 @@ function F_pure(prob::HeatPumpVarEff,x::AbstractVector{T}) where {T<:Real}
     T_evap_out = T_sat_evap + prob.ΔT_sh
     h_evap_out = Clapeyron.enthalpy(prob.fluid, p_evap, T_evap_out, prob.z)
     h_comp_in = h_evap_out;
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, η_val, h_comp_in, prob.z, prob.fluid)
+
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, η_val, h_comp_in, prob.z, prob.fluid, crit, T_sat_cond)
     T_cond_out = T_sat_cond - prob.ΔT_sc
     h_cond_out = Clapeyron.enthalpy(prob.fluid, p_cond, T_cond_out, prob.z)
     h_cond_in = h_comp_out
@@ -781,10 +838,11 @@ function F(prob::HeatPumpVarEff,x::AbstractVector{T};N::Int) where {T<:Real}
     # evaporator outlet
     T_evap_out = Clapeyron.temperature(prob.fluid, flash_res1_evap) + prob.ΔT_sh
     h_evap_out = Clapeyron.enthalpy(prob.fluid, p_evap, T_evap_out, prob.z)
-
+    T_dew_cond = Clapeyron.temperature(flash_res0_cond)
     # compressor
+    crit = crit_mix!(prob)
     h_comp_out = isentropic_compressor(p_evap, p_cond, η_val,
-                                       h_evap_out, prob.z, prob.fluid)
+                                       h_evap_out, prob.z, prob.fluid, crit, T_dew_cond)
 
     # condenser outlet
     T_cond_out = Clapeyron.temperature(prob.fluid, flash_res0_cond) - prob.ΔT_sc
@@ -869,9 +927,11 @@ Returns the volumetric heating capacity [kJ/m³]
 """
 function VHC(prob::HeatPump,sol::SolutionState)
     p_evap,p_cond = sol.x .*101325
-    T_in = Clapeyron.dew_temperature(prob.fluid,p_evap,prob.z)[1] + prob.ΔT_sh
-    h_in = enthalpy(prob.fluid, p_evap,T_in,prob.z)
-    h_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_in, prob.z, prob.fluid)
+    T_dew = Clapeyron.dew_temperature(prob.fluid,p_evap,prob.z)[1]
+    T_in = T_dew + prob.ΔT_sh
+    h_in = enthalpy(prob.fluid,p_evap,T_in,prob.z)
+    crit = crit_mix!(prob)
+    h_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_in, prob.z, prob.fluid, crit, T_dew)
     h_out_spec = h_out/molecular_weight(prob.fluid,prob.z)
     h_in_spec = h_in/molecular_weight(prob.fluid,prob.z)
     ρ_in = mass_density(prob.fluid,p_evap,T_in,prob.z)

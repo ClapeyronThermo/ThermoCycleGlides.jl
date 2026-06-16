@@ -38,10 +38,11 @@ function plotting_data(prob::HeatPump,sol::SolutionState;N = 30,p_min = nothing)
     p_evap , p_cond = sol.x .* 101325
     T_evap_out = dew_temperature(prob.fluid, p_evap, prob.z)[1] + prob.ΔT_sh
     h_comp_in = enthalpy(prob.fluid, p_evap, T_evap_out,prob.z, phase = :vapor)
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_comp_in, prob.z, prob.fluid)
-
+    crit = crit_mix!(prob)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.η_comp, h_comp_in, prob.z, prob.fluid, crit)
+    
     p_comp_array = collect(range(p_evap, p_cond, length = N))
-    f_h(p_out) = isentropic_compressor(p_evap,p_out,prob.η_comp,h_comp_in,prob.z,prob.fluid)
+    f_h(p_out) = isentropic_compressor(p_evap,p_out,prob.η_comp,h_comp_in,prob.z,prob.fluid,crit)
     h_comp_array = f_h.(p_comp_array)
     T_ph(p,h) = Clapeyron.PH.temperature(prob.fluid, p, h, prob.z)
     T_comp_array = T_ph.(p_comp_array, h_comp_array)
@@ -53,7 +54,7 @@ function plotting_data(prob::HeatPump,sol::SolutionState;N = 30,p_min = nothing)
     T_cond_array = T_ph.(p_cond, h_cond_array)
     s_ph(p,h) = Clapeyron.PH.entropy(prob.fluid, p, h, prob.z)
     s_cond_array = s_ph.(p_cond, h_cond_array)./molecular_weight(prob.fluid,prob.z)
-     h_valve_in = h_cond_out
+    h_valve_in = h_cond_out
     h_valve_out = h_valve_in
     h_valve_array = collect(range(h_valve_in, h_valve_out, length = N))
     p_valve_array = collect(range(p_cond, p_evap, length = N))
@@ -158,14 +159,13 @@ function plotting_data(prob::HeatPumpRecuperator,sol::SolutionState;N = 30,p_min
     h_cond_out = Clapeyron.enthalpy(prob.hp.fluid, p_cond, T_cond_out, prob.hp.z)
 
     q_ihex = ThermoCycleGlides.IHEX_Q(prob.hp.fluid,prob.ϵ,T_cond_out, p_cond, T_evap_out, p_evap, prob.hp.z)
-
-
-
+    
+    crit = crit_mix!(prob)
     h_comp_in =  q_ihex + h_evap_out  #enthalpy(prob.fluid, p_evap, T_evap_out,prob.z, phase = :vapor)
-    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid)
+    h_comp_out = ThermoCycleGlides.isentropic_compressor(p_evap, p_cond, prob.hp.η_comp, h_comp_in, prob.hp.z, prob.hp.fluid, crit)
 
     p_comp_array = collect(range(p_evap, p_cond, length = N))
-    f_h(p_out) = isentropic_compressor(p_evap,p_out,prob.hp.η_comp,h_comp_in,prob.hp.z,prob.hp.fluid)
+    f_h(p_out) = isentropic_compressor(p_evap,p_out,prob.hp.η_comp,h_comp_in,prob.hp.z,prob.hp.fluid,crit)
     h_comp_array = f_h.(p_comp_array)
     T_ph(p,h) = Clapeyron.PH.temperature(prob.hp.fluid, p, h, prob.hp.z)
     T_comp_array = T_ph.(p_comp_array, h_comp_array)
