@@ -87,7 +87,7 @@ function HeatPump(;fluid::EoSModel,z,T_evap_in,T_evap_out,T_cond_in,T_cond_out,�
     η_comp_T = convert(type_promoted, η_comp)
     pp_evap_T = convert(type_promoted, pp_evap)
     pp_cond_T = convert(type_promoted, pp_cond)
-    crit_T = (T(T_crit),T(P_crit),T(V_crit))
+    crit_T = (convert(type_promoted, T_crit),convert(type_promoted, P_crit),convert(type_promoted, V_crit))
     return HeatPump(
     fluid,         # EoSModel
     z_T,             # Z<:AbstractVector{T}
@@ -763,7 +763,7 @@ function HeatPumpVarEff(;
     pp_cond_T    = convert(type_promoted, pp_cond)
     ΔT_sh_T      = convert(type_promoted, ΔT_sh)
     ΔT_sc_T      = convert(type_promoted, ΔT_sc)
-    crit_T       = (T(T_crit),T(P_crit),T(V_crit))
+    crit_T = (convert(type_promoted, T_crit),convert(type_promoted, P_crit),convert(type_promoted, V_crit))
     return HeatPumpVarEff{F,type_promoted}(
         η_comp,        # Function
         fluid,         # EoSModel
