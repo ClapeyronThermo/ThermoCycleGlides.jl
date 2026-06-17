@@ -11,11 +11,7 @@ import Base: show, length, copy, similar, promote_type
 
 import Clapeyron: molecular_weight
 
-
 abstract type ThermoCycleProblem end
-
-
-
 
 #NonlinearSolver - NR
 norm(x) = sqrt(sum(abs2,x))
