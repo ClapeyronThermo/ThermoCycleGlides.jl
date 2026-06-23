@@ -13,7 +13,7 @@ end
 
 function isentropic_compressor(p_in::T1, p_out::T2, η_isen::T3, h_in::T4, z::AbstractArray{TZ}, fluid::EoSModel, crit = crit_mix(fluid,z),Tdew = nothing) where {T1<:Real, T2<:Real, T3<:Real, T4<:Real, TZ<:Real}
     TT = promote_type(T1, T2, T3, T4, TZ)
-    T_in = Clapeyron.PH.temperature(fluid, p_in, h_in, z, phase = :vapour)::TT
+    T_in = Clapeyron.Tproperty(fluid, p_in, h_in, z,enthalpy, phase = :vapour)::TT
     s_isen = Clapeyron.entropy(fluid, p_in, T_in, z, phase = :vapour)::TT
     # T_in = Tproperty(fluid,p_in,h_in,z,enthalpy,phase = :vapour)
     
